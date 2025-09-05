@@ -1,20 +1,20 @@
 import logging
 import os
+
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, 
-    ContextTypes, 
-    CommandHandler, 
-    ConversationHandler, 
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
     MessageHandler,
-    filters
+    filters,
 )
 
-load_dotenv()       # ищет переменные, которые написали и экспортирует их в виртуальное окружение
+load_dotenv()  # ищет переменные, которые написали и экспортирует их в виртуальное окружение
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
 
@@ -34,21 +34,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return FIRST_MESSAGE
 
+
 async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.effective_message.text
-    if answer == 'Да':
+    if answer == "Да":
         await context.bot.send_message(
+            chat_id=update.effective_user.id,
+            text="Чтобы забрать гайд, напиши свое имя",
+        )
+
+
+async def get_tel_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
         chat_id=update.effective_user.id,
-        text=f"Чтобы забрать гайд, напиши свое имя",
+        text=f"Отлично, {update.effective_user.first_name}. Теперь напиши свой номер телефона",
     )
 
 
-if __name__ == '__main__':
-    application = (
-        ApplicationBuilder()
-        .token(os.getenv("TOKEN"))
-        .build()
-        )
+if __name__ == "__main__":
+    application = ApplicationBuilder().token(os.getenv("TOKEN")).build()
     # Handler - обработчик, который будет обрабатывать
     # CommandHandler - обработчик, который будет обрабатывать команды
     # MessageHandler - обработчки, который будет обрабатывать сообщения
@@ -57,16 +61,13 @@ if __name__ == '__main__':
         states={
             FIRST_MESSAGE: [
                 MessageHandler(
-                    filters=filters.TEXT & filters.COMMAND, 
-                    callback=get_answer
+                    filters=filters.TEXT & filters.COMMAND, callback=get_answer
                 )
             ]
-        }, 
-        fallbacks=[CommandHandler("start", start)]
+        },
+        fallbacks=[CommandHandler("start", start)],
     )
 
-
-
     application.add_handler(conv_handler)
-    
+
     application.run_polling()
