@@ -40,7 +40,7 @@ async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=update.effective_user.id,
             text="Жаль! Если передумаешь - напиши /start",
         )
-        return ConversationHandler.END
+        return FIRST_MESSAGE
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['name'] = update.effective_message.text
