@@ -29,11 +29,6 @@ from handlers.progrev_handler import (
     get_inline_button,
 )
 
-load_dotenv()
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-
 from config.states import (
     FIRST_MESSAGE,
     GET_NAME,
@@ -43,8 +38,19 @@ from config.states import (
     INLINE_BUTTON,
 )
 
+from db.database import create_table
+import asyncio
+
+load_dotenv()
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+
+
 if __name__ == "__main__":
-    application = ApplicationBuilder().token(os.getenv("TOKEN")).build()
+    application = (
+        ApplicationBuilder().token(os.getenv("TOKEN")).post_init(create_table).build()
+    )
     # Handler - обработчик, который будет обрабатывать
     # CommandHandler - обработчик, котоырй будет обрабатывать команды
     # MessageHandler - обработчик, который будет обрабатвать сообщения
@@ -84,4 +90,5 @@ if __name__ == "__main__":
     )
 
     application.add_handler(conv_handler)
+
     application.run_polling()

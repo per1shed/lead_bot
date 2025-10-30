@@ -7,5 +7,4 @@ async def reminder(context: ContextTypes.DEFAULT_TYPE):
         chat_id=job.chat_id,
         text=job.data['message'],
     )
-
     

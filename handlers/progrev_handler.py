@@ -1,4 +1,3 @@
-from bdb import effective
 from datetime import timedelta
 import os
 
@@ -25,7 +24,8 @@ from config.states import (
 )
 from utils.escape_sym import escape_sym
 from handlers.jobs import reminder
-import asyncio
+from db.users_crude import create_user, get_user, update_user
+
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,10 +35,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # update.effective_message - информация о сообщении
     # context - контекст, в котором мы можем использовать бота
 
-    """отвечаем на кнопку InlineKeyboardButton"""
     query = update.callback_query
+    """отвечаем на кнопку InlineKeyboardButton"""
     if query:
         await query.answer()
+        await query.delete_message()
+    else:
+        if not await get_user(update.effective_user.id):
+            await create_user(update.effective_user.id)
 
     """отправляем сообщение с кнопками"""
     keyboard = [["Да", "Нет"], ["Еще не знаю"]]
@@ -53,17 +57,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=markup,
         parse_mode="MarkdownV2",
     )
-    context.job_queue.run_once(
+    job = context.job_queue.run_once(
         reminder,
-        when=timedelta(minutes=60),
-        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        when=timedelta(minutes=60), data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
         name="reminder",
         chat_id=update.effective_user.id,
     )
+    context.user_data['job'] = job
     return FIRST_MESSAGE
 
 
 async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['job'].schedule_removal()
     answer = update.effective_message.text
     context.user_data["answer"] = answer
     # Достать значение, которое было положено в словарь можно следующим образом:
@@ -74,13 +79,14 @@ async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         one_time_keyboard=True,
         input_field_placeholder="Нажмите на свое имя или напишите его",
     )
-    context.job_queue.run_once(
+    job_answer = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
         data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
         name="reminder",
         chat_id=update.effective_user.id,
     )
+    context.user_data['job_answer'] = job_answer
     if answer.lower() in ["да", "yes"]:
         await context.bot.send_message(
             chat_id=update.effective_user.id, text="Как вас зовут?", reply_markup=markup
@@ -101,7 +107,12 @@ async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name"] = update.effective_message.text
+    name = update.effective_message.text
+
+    await update_user(update.effective_user.id, name=name)
+    
+    context.user_data['job_answer'].schedule_removal()
+    context.user_data["name"] = name
     keyboard = [[KeyboardButton("Отправить номер телфона", request_contact=True)]]
     markup = ReplyKeyboardMarkup(keyboard)
     await context.bot.send_message(
@@ -109,35 +120,45 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="Отлично! Теперь напиши свой номер телефона.",
         reply_markup=markup,
     )
-    context.job_queue.run_once(
+    job_name = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
         data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
         name="reminder",
         chat_id=update.effective_user.id,
     )
+    context.user_data['job_name'] = job_name
     return GET_PHONE
 
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['job_name'].schedule_removal()
     phone = update.effective_message.contact.phone_number
     context.user_data["phone"] = phone
+
+    await update_user(update.effective_user.id, phone=phone)
+
     await context.bot.send_message(
         chat_id=update.effective_user.id,
         text="Супер! Теперь напиши свою электронную почту.",
     )
-    context.job_queue.run_once(
+    job_phone = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
         data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
         name="reminder",
         chat_id=update.effective_user.id,
     )
+    context.user_data['job_phone'] = job_phone
     return GET_EMAIL
 
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["email"] = update.effective_message.text
+    context.user_data['job_phone'].schedule_removal()
+    email = update.effective_message.text
+    context.user_data["email"] = email
+
+    await update_user(update.effective_user.id, email=email)
 
     keyboard = [
         [
@@ -152,17 +173,19 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="Согласны ли вы на обработку персональных данных?",
         reply_markup=markup,
     )
-    context.job_queue.run_once(
+    job_mail = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
         data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
         name="reminder",
         chat_id=update.effective_user.id,
     )
+    context.user_data['job_mail'] = job_mail
     return GET_CONSENT
 
 
 async def get_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['job_mail'].schedule_removal()
     query = update.callback_query
     await query.answer()
 
@@ -172,6 +195,8 @@ async def get_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = context.user_data.get("name", "пользователь")
         phone = context.user_data.get("phone", "не указан")
         email = context.user_data.get("email", "не указан")
+
+        await update_user(update.effective_user.id, agreement=1)
 
         await context.bot.send_message(
             chat_id=admin_id,
