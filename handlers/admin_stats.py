@@ -3,11 +3,12 @@ import aiosqlite
 from logs.logger import logger
 from db.users_crud import get_user_stats
 from db.database import create_table
+from config.config import ADMIN_ID
 
 async def send_admin_stats(application):
     """Отправляет статистику админу при запуске бота И логирует в файл"""
     try:
-        admin_id = int(os.getenv("ADMIN_ID"))
+        admin_id = int(ADMIN_ID)
         total_users, tag_stats = await get_user_stats()
         
         # Получаем количества по тегам

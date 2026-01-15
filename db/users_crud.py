@@ -13,6 +13,11 @@ async def get_user(id_tg: int):
         return await cursor.fetchone()
     return None
 
+async def get_users():
+    async with aiosqlite.connect('lead.db') as conn:
+        cursor = await conn.execute('SELECT * FROM users')
+        return await cursor.fetchall()
+
 async def update_user(id_tg: int, **kwargs):
     print(kwargs.items())
     async with aiosqlite.connect('lead.db') as conn:
@@ -86,3 +91,42 @@ async def get_user_stats():
         
         return total_users, dict(tag_stats)
 
+
+async def increment_visit_count(id_tg: int):
+    """Увеличивает счетчик визитов и обновляет last_visit"""
+    async with aiosqlite.connect('lead.db') as conn:
+        await conn.execute('''
+            UPDATE users 
+            SET visit_count = visit_count + 1, 
+                last_visit = CURRENT_TIMESTAMP 
+            WHERE id_tg = ?
+        ''', (id_tg,))
+        await conn.commit()
+    return True
+
+async def get_visit_count(id_tg: int):
+    """Получает количество визитов пользователя"""
+    async with aiosqlite.connect('lead.db') as conn:
+        cursor = await conn.execute(
+            'SELECT visit_count FROM users WHERE id_tg = ?', 
+            (id_tg,)
+        )
+        result = await cursor.fetchone()
+        return result[0] if result else 0
+
+async def is_returning_user(id_tg: int, days_threshold: int = 30):
+    """Проверяет, вернулся ли пользователь после долгого отсутствия"""
+    async with aiosqlite.connect('lead.db') as conn:
+        cursor = await conn.execute('''
+            SELECT 
+                last_visit,
+                julianday('now') - julianday(last_visit) as days_passed
+            FROM users 
+            WHERE id_tg = ?
+        ''', (id_tg,))
+        result = await cursor.fetchone()
+        
+        if result and result[1]:  # Если есть last_visit
+            days_passed = result[1]
+            return days_passed > days_threshold
+        return False

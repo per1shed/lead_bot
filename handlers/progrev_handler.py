@@ -26,19 +26,31 @@ from utils.escape_sym import escape_sym
 from handlers.jobs import reminder
 from db.users_crud import create_user, get_user, update_user
 from logs.logger import logger
-from db.users_crud import create_user_tag, delete_user_tag, get_tag_id_by_name
+from db.users_crud import (
+    create_user_tag,
+    delete_user_tag,
+    get_tag_id_by_name,
+    increment_visit_count,
+    get_visit_count,
+    is_returning_user,
+)
+from config.config import ADMIN_ID
+from handlers.admins_handler import admins_start
+
+
 
 async def assign_tag_to_user(user_id: int, tag_name: str):
-    """Назначает тег пользователю и удаляет старые теги прогресса"""
+    """Назначает тег пользователю"""
     tag_id = await get_tag_id_by_name(tag_name)
     if tag_id:
-        # Удаляем старые теги прогресса перед назначением нового
-        progress_tags = ['Горячий', 'Обычный', 'Холодный']
-        for old_tag_name in progress_tags:
-            old_tag_id = await get_tag_id_by_name(old_tag_name)
-            if old_tag_id:
-                await delete_user_tag(user_id, old_tag_id)
-        
+        # ⭐ИЗМЕНЯЕМ: удаляем только теги прогресса, не статусные теги
+        progress_tags = ["Горячий", "Обычный", "Холодный"]
+        if tag_name in progress_tags:
+            for old_tag_name in progress_tags:
+                old_tag_id = await get_tag_id_by_name(old_tag_name)
+                if old_tag_id:
+                    await delete_user_tag(user_id, old_tag_id)
+
         # Добавляем новый тег
         success = await create_user_tag(user_id, tag_id)
         if success:
@@ -46,41 +58,92 @@ async def assign_tag_to_user(user_id: int, tag_name: str):
         return success
     return False
 
+
+async def delete_user_tag_by_name(user_id: int, tag_name: str):
+    """Удаляет тег по имени у пользователя"""
+    tag_id = await get_tag_id_by_name(tag_name)
+    if tag_id:
+        return await delete_user_tag(user_id, tag_id)
+    return False
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # update - полная информация о том что произошло
     # update.effective_user - информация о человеке
     # update.effective_chat - информация о чате
     # update.effective_message - информация о сообщении
     # context - контекст, в котором мы можем использовать бота
-
+    if update.effective_user.id == int(ADMIN_ID):
+        return await admins_start(update, context)
     query = update.callback_query
-    """отвечаем на кнопку InlineKeyboardButton"""
     if query:
         await query.answer()
         await query.delete_message()
+    
+    user_id = update.effective_user.id
+    user = await get_user(user_id)
+    
+    if not user:
+        # НОВЫЙ ПОЛЬЗОВАТЕЛЬ
+        await create_user(user_id)
+        logger.info(f"🎉 Новый пользователь {user_id} создан")
+        await assign_tag_to_user(user_id, "Новый")
+        
+        # ⭐ ИСПРАВЛЯЕМ: экранируем только то, что нужно
+        welcome_text = (
+            f"Привет, {update.effective_user.first_name}\\!\n"  # ⭐ Экранируем !
+            "*Добро пожаловать\\!* Рады видеть вас впервые\\.\n\n"  # ⭐ Экранируем ! и .
+            "Хочешь получить гайд по восстановлению или программу тренировок\\?"
+        )
+        
     else:
-        if not await get_user(update.effective_user.id):
-            await create_user(update.effective_user.id)
-            logger.info(f"Пользователь {update.effective_user.id} создан 🚀")
+        # ПОВТОРНЫЙ ПОЛЬЗОВАТЕЛЬ
+        await increment_visit_count(user_id)
+        visit_count = await get_visit_count(user_id)
+        
+        logger.info(f"↩️ Повторный визит пользователя {user_id}, визит #{visit_count}")
+        await delete_user_tag_by_name(user_id, "Новый")
+        
+        if visit_count == 2:
+            await assign_tag_to_user(user_id, "Повторный")
+            logger.info(f"🏷️ Пользователю {user_id} добавлен тег 'Повторный'")
+            welcome_type = "второй раз"
+            
+        elif await is_returning_user(user_id, days_threshold=7):
+            await assign_tag_to_user(user_id, "Вернувшийся")
+            logger.info(f"🔙 Пользователь {user_id} вернулся после долгого отсутствия")
+            welcome_type = "возвращением"
+            
+        else:
+            welcome_type = "снова"
+        
+        # ⭐ ИСПРАВЛЯЕМ: экранируем специальные символы
+        welcome_text = (
+            f"Привет, {update.effective_user.first_name}\\!\n"
+            f"*Рады видеть вас {welcome_type}\\!*\n\n"
+            "Хочешь получить гайд по восстановлению с программой тренировок\\?"
+        )
 
-    """отправляем сообщение с кнопками"""
     keyboard = [["Да", "Нет"], ["Еще не знаю"]]
     markup = ReplyKeyboardMarkup(
         keyboard,
         one_time_keyboard=True,
         input_field_placeholder="Выбери вариант ответа",
     )
+    
     await context.bot.send_message(
-        chat_id=update.effective_user.id,
-        text=escape_sym(f"Привет, {update.effective_user.first_name}.\n*Хочешь гайд?*"),
+        chat_id=user_id,
+        text=welcome_text,
         reply_markup=markup,
-        parse_mode="MarkdownV2",
+        parse_mode="MarkdownV2",  # ⭐ ОСТАВЛЯЕМ MarkdownV2
     )
+    
     job = context.job_queue.run_once(
         reminder,
-        when=timedelta(minutes=60), data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
-        name=f"reminder{update.effective_user.id}",
-        chat_id=update.effective_user.id,
+        when=timedelta(minutes=60), 
+        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        name=f"reminder{user_id}",
+        chat_id=user_id,
     )
     context.user_data['job_name'] = job.name
 
@@ -88,9 +151,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-   
-    if 'job_name' in context.user_data:
-        for jobs in context.job_queue.get_jobs_by_name(context.user_data['job_name']):
+    if "job_name" in context.user_data:
+        for jobs in context.job_queue.get_jobs_by_name(context.user_data["job_name"]):
             jobs.schedule_removal()
 
     answer = update.effective_message.text
@@ -106,11 +168,13 @@ async def get_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
-        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        data={
+            "message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."
+        },
         name=f"reminder{update.effective_user.id}",
         chat_id=update.effective_user.id,
     )
-    context.user_data['job_name'] = job.name
+    context.user_data["job_name"] = job.name
 
     if answer.lower() in ["да", "yes"]:
         await context.bot.send_message(
@@ -135,11 +199,11 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_message.text
 
     await update_user(update.effective_user.id, name=name)
-    
+
     await assign_tag_to_user(update.effective_user.id, "Холодный")
 
-    if 'job_name' in context.user_data:
-        for jobs in context.job_queue.get_jobs_by_name(context.user_data['job_name']):
+    if "job_name" in context.user_data:
+        for jobs in context.job_queue.get_jobs_by_name(context.user_data["job_name"]):
             jobs.schedule_removal()
 
     context.user_data["name"] = name
@@ -153,18 +217,19 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
-        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        data={
+            "message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."
+        },
         name=f"reminder{update.effective_user.id}",
         chat_id=update.effective_user.id,
     )
-    context.user_data['job_name'] = job.name
+    context.user_data["job_name"] = job.name
     return GET_PHONE
 
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
-    if 'job_name' in context.user_data:
-        for jobs in context.job_queue.get_jobs_by_name(context.user_data['job_name']):
+    if "job_name" in context.user_data:
+        for jobs in context.job_queue.get_jobs_by_name(context.user_data["job_name"]):
             jobs.schedule_removal()
 
     phone = update.effective_message.contact.phone_number
@@ -181,18 +246,19 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
-        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        data={
+            "message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."
+        },
         name=f"reminder{update.effective_user.id}",
         chat_id=update.effective_user.id,
     )
-    context.user_data['job_name'] = job.name
+    context.user_data["job_name"] = job.name
     return GET_EMAIL
 
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
-    if 'job_name' in context.user_data:
-        for jobs in context.job_queue.get_jobs_by_name(context.user_data['job_name']):
+    if "job_name" in context.user_data:
+        for jobs in context.job_queue.get_jobs_by_name(context.user_data["job_name"]):
             jobs.schedule_removal()
 
     email = update.effective_message.text
@@ -216,24 +282,25 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = context.job_queue.run_once(
         reminder,
         when=timedelta(minutes=60),
-        data={"message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."},
+        data={
+            "message": "Вы остановились на половине пути. Для того, чтобы забрать подарок ответьте на оставшиеся вопросы."
+        },
         name=f"reminder{update.effective_user.id}",
         chat_id=update.effective_user.id,
     )
-    context.user_data['job_name'] = job.name
+    context.user_data["job_name"] = job.name
     return GET_CONSENT
 
 
 async def get_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
-    if 'job_name' in context.user_data:
-        for jobs in context.job_queue.get_jobs_by_name(context.user_data['job_name']):
+    if "job_name" in context.user_data:
+        for jobs in context.job_queue.get_jobs_by_name(context.user_data["job_name"]):
             jobs.schedule_removal()
-            
+
     query = update.callback_query
     await query.answer()
 
-    admin_id = int(os.getenv("ADMIN_ID"))
+    admin_id = int(ADMIN_ID)
 
     if query.data == "consent_yes":
         name = context.user_data.get("name", "пользователь")

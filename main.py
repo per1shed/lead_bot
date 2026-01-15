@@ -1,7 +1,5 @@
 import logging
-import os
 
-from dotenv import load_dotenv
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -37,21 +35,30 @@ from config.states import (
     GET_EMAIL,
     GET_CONSENT,
     INLINE_BUTTON,
+    ADMIN_START,
 )
 
 from db.database import create_table
 import asyncio
 from logs.logger import logger
 from handlers.admin_stats import post_init
-
-load_dotenv()
+from config.config import TOKEN
+from handlers.admins_handler import (
+    list_users,
+    csv_users_list,
+    spam_send_messages,
+    show_hot_users,
+    show_usual_users,
+    show_cold_users,
+    handle_all_admin_messages
+)
 
 
 if __name__ == "__main__":
     persistence = PicklePersistence(filepath="lead_bot")
     application = (
         ApplicationBuilder()
-        .token(os.getenv("TOKEN"))
+        .token(TOKEN)
         .persistence(persistence)
         .post_init(post_init)
         .build()
@@ -89,6 +96,23 @@ if __name__ == "__main__":
             INLINE_BUTTON: [
                 CallbackQueryHandler(callback=get_inline_button, pattern="yes"),
                 CallbackQueryHandler(callback=start, pattern="no"),
+            ],
+            # Admin handlers
+            ADMIN_START: [
+                CallbackQueryHandler(callback=list_users, pattern="user_list"),
+                CallbackQueryHandler(callback=csv_users_list, pattern="csv_users_list"),
+                CallbackQueryHandler(
+                    callback=spam_send_messages, pattern="send_message"
+                ),
+                CallbackQueryHandler(callback=show_hot_users, pattern="hot_user_list"),
+                CallbackQueryHandler(
+                    callback=show_usual_users, pattern="usual_user_list"
+                ),
+                CallbackQueryHandler(
+                    callback=show_cold_users, pattern="cold_user_list"
+                ),
+                # ОБРАБОТЧИК ВСЕХ ТЕКСТОВЫХ СООБЩЕНИЙ
+                MessageHandler(filters.TEXT & ~filters.COMMAND, callback=handle_all_admin_messages),
             ],
         },
         fallbacks=[CommandHandler("start", start)],
